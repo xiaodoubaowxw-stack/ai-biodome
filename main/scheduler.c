@@ -3,6 +3,8 @@
 #include "relays.h"
 #include "nvs_storage.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <string.h>
 #include <stdio.h>
 #include <time.h>

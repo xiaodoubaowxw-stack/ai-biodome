@@ -25,10 +25,47 @@ extern float g_temperature, g_humidity, g_lux;
 extern int g_soil_percent;
 extern uint16_t g_eco2, g_tvoc;
 extern bool g_auto_mode;
+extern portMUX_TYPE g_sensor_mux;
 
 static httpd_handle_t s_ws_server = NULL;
 static int s_ws_clients[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
 static int s_ws_client_count = 0;
+
+/* Simple token for WS auth — stored in NVS, default "biodome" */
+#define WS_AUTH_TOKEN_DEFAULT "biodome"
+static char s_ws_token[33] = WS_AUTH_TOKEN_DEFAULT;
+
+/**
+ * Verify WebSocket auth token from query parameter "token" or
+ * HTTP header "X-Auth-Token".
+ */
+static bool ws_verify_auth(httpd_req_t *req)
+{
+    char token_buf[64] = {0};
+
+    /* Try query param: /ws?token=xxx */
+    size_t buf_len = httpd_req_get_url_query_len(req) + 1;
+    if (buf_len > 1 && buf_len <= sizeof(token_buf)) {
+        char *query = malloc(buf_len);
+        if (query && httpd_req_get_url_query_str(req, query, buf_len) == ESP_OK) {
+            if (httpd_query_key_value(query, "token", token_buf, sizeof(token_buf)) == ESP_OK) {
+                free(query);
+                return (strcmp(token_buf, s_ws_token) == 0);
+            }
+        }
+        free(query);
+    }
+
+    /* Try header: X-Auth-Token */
+    size_t hdr_len = httpd_req_get_hdr_value_len(req, "X-Auth-Token");
+    if (hdr_len > 0 && hdr_len < sizeof(token_buf)) {
+        if (httpd_req_get_hdr_value_str(req, "X-Auth-Token", token_buf, sizeof(token_buf)) == ESP_OK) {
+            return (strcmp(token_buf, s_ws_token) == 0);
+        }
+    }
+
+    return false;  /* No token provided */
+}
 
 static void add_client(int fd)
 {
@@ -54,21 +91,36 @@ static void remove_client(int fd)
 
 char *ws_build_full_json(void)
 {
+    /* Snapshot shared variables under critical section */
+    float temp, hum, lux;
+    int soil;
+    uint16_t eco2, tvoc;
+    bool auto_mode;
+    portENTER_CRITICAL(&g_sensor_mux);
+    temp = g_temperature;
+    hum = g_humidity;
+    lux = g_lux;
+    soil = g_soil_percent;
+    eco2 = g_eco2;
+    tvoc = g_tvoc;
+    auto_mode = g_auto_mode;
+    portEXIT_CRITICAL(&g_sensor_mux);
+
     cJSON *root = cJSON_CreateObject();
 
     /* Current sensor data */
     cJSON *current = cJSON_CreateObject();
-    cJSON_AddNumberToObject(current, "temp", g_temperature);
-    cJSON_AddNumberToObject(current, "hum", g_humidity);
-    cJSON_AddNumberToObject(current, "lux", g_lux);
-    cJSON_AddNumberToObject(current, "soil", g_soil_percent);
-    cJSON_AddNumberToObject(current, "eco2", g_eco2);
-    cJSON_AddNumberToObject(current, "tvoc", g_tvoc);
+    cJSON_AddNumberToObject(current, "temp", temp);
+    cJSON_AddNumberToObject(current, "hum", hum);
+    cJSON_AddNumberToObject(current, "lux", lux);
+    cJSON_AddNumberToObject(current, "soil", soil);
+    cJSON_AddNumberToObject(current, "eco2", eco2);
+    cJSON_AddNumberToObject(current, "tvoc", tvoc);
     cJSON_AddItemToObject(root, "current", current);
 
     /* Device state */
     cJSON *state = cJSON_CreateObject();
-    cJSON_AddStringToObject(state, "mode", g_auto_mode ? "auto" : "manual");
+    cJSON_AddStringToObject(state, "mode", auto_mode ? "auto" : "manual");
     cJSON_AddNumberToObject(state, "pump", relay_get(RELAY_PUMP) ? 1 : 0);
     cJSON_AddNumberToObject(state, "light", relay_get(RELAY_LIGHT) ? 1 : 0);
     cJSON_AddNumberToObject(state, "heater", relay_get(RELAY_HEATER) ? 1 : 0);
@@ -126,9 +178,14 @@ char *ws_build_full_json(void)
 
 static cJSON *build_state_json(void)
 {
+    bool auto_mode;
+    portENTER_CRITICAL(&g_sensor_mux);
+    auto_mode = g_auto_mode;
+    portEXIT_CRITICAL(&g_sensor_mux);
+
     cJSON *root = cJSON_CreateObject();
     cJSON *state = cJSON_CreateObject();
-    cJSON_AddStringToObject(state, "mode", g_auto_mode ? "auto" : "manual");
+    cJSON_AddStringToObject(state, "mode", auto_mode ? "auto" : "manual");
     cJSON_AddNumberToObject(state, "pump", relay_get(RELAY_PUMP) ? 1 : 0);
     cJSON_AddNumberToObject(state, "light", relay_get(RELAY_LIGHT) ? 1 : 0);
     cJSON_AddNumberToObject(state, "heater", relay_get(RELAY_HEATER) ? 1 : 0);
@@ -147,7 +204,11 @@ void ws_broadcast_json(const char *json_str)
     };
     for (int i = 0; i < 8; i++) {
         if (s_ws_clients[i] != -1) {
-            httpd_ws_send_frame_async(s_ws_server, s_ws_clients[i], &ws_pkt);
+            esp_err_t ret = httpd_ws_send_frame_async(s_ws_server, s_ws_clients[i], &ws_pkt);
+            if (ret != ESP_OK) {
+                ESP_LOGW(TAG, "WS send failed for fd=%d, removing client", s_ws_clients[i]);
+                remove_client(s_ws_clients[i]);
+            }
         }
     }
 }
@@ -181,12 +242,19 @@ static void handle_ws_message(const uint8_t *payload, size_t len)
     if (strcmp(action_str, "set_mode") == 0) {
         cJSON *mode = cJSON_GetObjectItem(root, "mode");
         if (mode && cJSON_IsString(mode)) {
+            portENTER_CRITICAL(&g_sensor_mux);
             g_auto_mode = (strcmp(mode->valuestring, "auto") == 0);
+            portEXIT_CRITICAL(&g_sensor_mux);
             scheduler_run();
             ws_broadcast_state();
         }
     }
-    else if (strcmp(action_str, "set_device") == 0 && !g_auto_mode) {
+    else if (strcmp(action_str, "set_device") == 0) {
+        bool auto_mode;
+        portENTER_CRITICAL(&g_sensor_mux);
+        auto_mode = g_auto_mode;
+        portEXIT_CRITICAL(&g_sensor_mux);
+        if (auto_mode) { cJSON_Delete(root); return; }
         cJSON *device = cJSON_GetObjectItem(root, "device");
         cJSON *state_val = cJSON_GetObjectItem(root, "state");
         if (device && cJSON_IsString(device) && state_val) {
@@ -236,6 +304,14 @@ static void handle_ws_message(const uint8_t *payload, size_t len)
 static esp_err_t ws_handler(httpd_req_t *req)
 {
     if (req->method == HTTP_GET) {
+        /* Authenticate on handshake */
+        if (!ws_verify_auth(req)) {
+            ESP_LOGW(TAG, "WebSocket auth failed, rejecting connection");
+            httpd_resp_set_status(req, "401 Unauthorized");
+            httpd_resp_send(req, NULL, 0);
+            return ESP_FAIL;
+        }
+
         int fd = httpd_req_to_sockfd(req);
         add_client(fd);
         ESP_LOGI(TAG, "WebSocket client connected (fd=%d, total=%d)", fd, s_ws_client_count);
@@ -260,7 +336,9 @@ static esp_err_t ws_handler(httpd_req_t *req)
     /* First call to get frame length */
     esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
     if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "WebSocket recv frame failed: %s", esp_err_to_name(ret));
+        int fd = httpd_req_to_sockfd(req);
+        ESP_LOGW(TAG, "WebSocket recv frame failed (fd=%d): %s", fd, esp_err_to_name(ret));
+        remove_client(fd);
         return ret;
     }
 

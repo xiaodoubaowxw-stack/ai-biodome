@@ -39,24 +39,40 @@ esp_err_t sensors_init(void)
         .device_address = SHT40_ADDR,
         .scl_speed_hz = 100000,
     };
-    i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_sht40_dev);
+    ret = i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_sht40_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SHT40 add_device failed: %s", esp_err_to_name(ret));
+        s_sht40_dev = NULL;
+    }
 
     /* BH1750 */
     dev_cfg.device_address = BH1750_ADDR;
-    i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_bh1750_dev);
+    ret = i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_bh1750_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "BH1750 add_device failed: %s", esp_err_to_name(ret));
+        s_bh1750_dev = NULL;
+    }
 
     /* SGP30 */
     dev_cfg.device_address = SGP30_ADDR;
-    i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_sgp30_dev);
+    ret = i2c_master_bus_add_device(s_i2c_bus, &dev_cfg, &s_sgp30_dev);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SGP30 add_device failed: %s", esp_err_to_name(ret));
+        s_sgp30_dev = NULL;
+    }
 
     /* Start BH1750 continuous high-res mode */
-    uint8_t bh_cmd = 0x10;
-    i2c_master_transmit(s_bh1750_dev, &bh_cmd, 1, 100);
+    if (s_bh1750_dev) {
+        uint8_t bh_cmd = 0x10;
+        i2c_master_transmit(s_bh1750_dev, &bh_cmd, 1, 100);
+    }
 
     /* Init SGP30 */
-    uint8_t sgp_init[] = {0x20, 0x03};  // IAQ init
-    i2c_master_transmit(s_sgp30_dev, sgp_init, 2, 100);
-    vTaskDelay(pdMS_TO_TICKS(10));  // SGP30 needs 10ms after init
+    if (s_sgp30_dev) {
+        uint8_t sgp_init[] = {0x20, 0x03};  // IAQ init
+        i2c_master_transmit(s_sgp30_dev, sgp_init, 2, 100);
+        vTaskDelay(pdMS_TO_TICKS(10));  // SGP30 needs 10ms after init
+    }
 
     /* ADC for soil moisture */
     adc_oneshot_unit_init_cfg_t adc_cfg = {
@@ -78,6 +94,7 @@ esp_err_t sensors_init(void)
 /* ---- SHT40 ---- */
 esp_err_t sensor_read_sht40(float *temp, float *hum)
 {
+    if (!s_sht40_dev) return ESP_ERR_INVALID_STATE;
     uint8_t cmd = 0xFD;  // high precision, no heater
     uint8_t buf[6] = {0};
 
@@ -101,6 +118,7 @@ esp_err_t sensor_read_sht40(float *temp, float *hum)
 /* ---- BH1750 ---- */
 esp_err_t sensor_read_bh1750(float *lux)
 {
+    if (!s_bh1750_dev) return ESP_ERR_INVALID_STATE;
     uint8_t buf[2] = {0};
     esp_err_t ret = i2c_master_receive(s_bh1750_dev, buf, 2, 100);
     if (ret != ESP_OK) return ret;
@@ -110,9 +128,26 @@ esp_err_t sensor_read_bh1750(float *lux)
     return ESP_OK;
 }
 
+/* CRC-8 for SGP30 (polynomial 0x31, init 0xFF) */
+static uint8_t sgp30_crc8(const uint8_t *data, size_t len)
+{
+    uint8_t crc = 0xFF;
+    for (size_t i = 0; i < len; i++) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; bit++) {
+            if (crc & 0x80)
+                crc = (crc << 1) ^ 0x31;
+            else
+                crc = crc << 1;
+        }
+    }
+    return crc;
+}
+
 /* ---- SGP30 ---- */
 esp_err_t sensor_read_sgp30(uint16_t *eco2, uint16_t *tvoc)
 {
+    if (!s_sgp30_dev) return ESP_ERR_INVALID_STATE;
     uint8_t cmd[] = {0x20, 0x08};  // IAQ measure
     uint8_t buf[6] = {0};
 
@@ -123,6 +158,16 @@ esp_err_t sensor_read_sgp30(uint16_t *eco2, uint16_t *tvoc)
 
     ret = i2c_master_receive(s_sgp30_dev, buf, 6, 100);
     if (ret != ESP_OK) return ret;
+
+    /* Verify CRC-8 for each 2-byte + CRC group */
+    if (sgp30_crc8(&buf[0], 2) != buf[2]) {
+        ESP_LOGW(TAG, "SGP30 eCO2 CRC mismatch");
+        return ESP_ERR_INVALID_CRC;
+    }
+    if (sgp30_crc8(&buf[3], 2) != buf[5]) {
+        ESP_LOGW(TAG, "SGP30 TVOC CRC mismatch");
+        return ESP_ERR_INVALID_CRC;
+    }
 
     *eco2 = ((uint16_t)buf[0] << 8) | buf[1];
     *tvoc = ((uint16_t)buf[3] << 8) | buf[4];
@@ -145,6 +190,15 @@ int sensor_read_soil(void)
 }
 
 /* ---- Read all ---- */
+/*
+ * Note: SGP30 is NOT read here. It is driven by an independent 1-second
+ * timer (sgp30_timer) which is required for the sensor's internal baseline
+ * calibration. eco2/tvoc are copied from the global variables that the
+ * SGP30 timer updates.
+ */
+extern portMUX_TYPE g_sensor_mux;
+extern uint16_t g_eco2, g_tvoc;
+
 esp_err_t sensors_read_all(sensor_data_t *data)
 {
     memset(data, 0, sizeof(*data));
@@ -156,6 +210,12 @@ esp_err_t sensors_read_all(sensor_data_t *data)
         ESP_LOGW(TAG, "BH1750 read failed");
     }
     data->soil_percent = sensor_read_soil();
+
+    /* Copy SGP30 values from globals (updated by independent 1s timer) */
+    portENTER_CRITICAL(&g_sensor_mux);
+    data->eco2 = g_eco2;
+    data->tvoc = g_tvoc;
+    portEXIT_CRITICAL(&g_sensor_mux);
 
     return ESP_OK;
 }

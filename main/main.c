@@ -47,6 +47,9 @@ uint16_t g_eco2 = 400;
 uint16_t g_tvoc = 0;
 bool     g_auto_mode = true;
 
+/* Critical section spinlock for global variable access */
+portMUX_TYPE g_sensor_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static httpd_handle_t s_http_server = NULL;
 static httpd_handle_t s_ws_server = NULL;
 
@@ -56,20 +59,29 @@ static void sensor_timer_cb(TimerHandle_t timer)
     /* Read all sensors */
     sensor_data_t data;
     if (sensors_read_all(&data) == ESP_OK) {
+        portENTER_CRITICAL(&g_sensor_mux);
         g_temperature = data.temperature;
         g_humidity = data.humidity;
         g_lux = data.lux;
         g_soil_percent = data.soil_percent;
+        portEXIT_CRITICAL(&g_sensor_mux);
     }
+
+    /* Snapshot eco2/tvoc for history and LED check */
+    uint16_t eco2, tvoc;
+    portENTER_CRITICAL(&g_sensor_mux);
+    eco2 = g_eco2;
+    tvoc = g_tvoc;
+    portEXIT_CRITICAL(&g_sensor_mux);
 
     /* Run auto control logic */
     scheduler_run();
 
     /* Record history */
-    history_record(g_temperature, g_humidity, g_lux, g_soil_percent, g_eco2, g_tvoc);
+    history_record(g_temperature, g_humidity, g_lux, g_soil_percent, eco2, tvoc);
 
     /* Update LED indicator */
-    if (g_soil_percent < 20 || g_temperature > 35.0f || g_eco2 > 1500) {
+    if (g_soil_percent < 20 || g_temperature > 35.0f || eco2 > 1500) {
         led_set_color(255, 0, 0);  // Red = alert
     } else {
         led_set_color(0, 255, 0);  // Green = normal

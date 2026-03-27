@@ -19,6 +19,7 @@ static bool s_connected = false;
 static char s_ip_str[16] = "0.0.0.0";
 static char s_mac_str[18] = "00:00:00:00:00:00";
 static esp_netif_t *s_netif_sta = NULL;
+static bool s_wifi_led_blinking = false;  /* flag: LED blink requested by event handler */
 
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
@@ -33,10 +34,8 @@ static void event_handler(void *arg, esp_event_base_t event_base,
         if (s_retry_num < WIFI_STA_TIMEOUT_SEC) {
             s_retry_num++;
             ESP_LOGW(TAG, "WiFi disconnected, retry %d/%d", s_retry_num, WIFI_STA_TIMEOUT_SEC);
-            led_set_color(0, 0, 255);  // Blue = connecting
-            vTaskDelay(pdMS_TO_TICKS(500));
-            led_clear();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            /* Signal LED blink — handled by a separate task/timer, not here */
+            s_wifi_led_blinking = true;
             esp_wifi_connect();
         } else {
             ESP_LOGW(TAG, "WiFi STA connection failed, giving up");
@@ -52,12 +51,18 @@ static void event_handler(void *arg, esp_event_base_t event_base,
     }
 }
 
+static bool s_initialized = false;
+
 static void init_common(void)
 {
+    if (s_initialized) return;
+
     s_wifi_event_group = xEventGroupCreate();
 
-    ESP_ERROR_CHECK(esp_netif_init());
-    ESP_ERROR_CHECK(esp_event_loop_create_default());
+    esp_err_t ret = esp_netif_init();
+    if (ret != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(ret);
+    ret = esp_event_loop_create_default();
+    if (ret != ESP_ERR_INVALID_STATE) ESP_ERROR_CHECK(ret);
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         WIFI_EVENT, ESP_EVENT_ANY_ID, &event_handler, NULL, NULL));
@@ -67,6 +72,8 @@ static void init_common(void)
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
+
+    s_initialized = true;
 }
 
 bool wifi_init_sta(const char *ssid, const char *password)

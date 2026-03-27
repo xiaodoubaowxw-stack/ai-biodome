@@ -7,26 +7,20 @@ static led_strip_handle_t s_led_strip = NULL;
 
 esp_err_t led_indicator_init(void)
 {
+    /* LED strip general configuration */
     led_strip_config_t strip_config = {
         .strip_gpio_num = 48,
         .max_leds = 1,
         .led_model = LED_MODEL_WS2812,
-        .color_component_format = {
-            .format = {
-                .r_pos = 1,
-                .g_pos = 0,
-                .b_pos = 2,
-                .num_components = 3,
-            },
-        },
         .flags = {
             .invert_out = false,
         },
     };
 
+    /* LED strip RMT configuration */
     led_strip_rmt_config_t rmt_config = {
         .clk_src = RMT_CLK_SRC_DEFAULT,
-        .resolution_hz = 10 * 1000 * 1000,  // 10 MHz
+        .resolution_hz = 10 * 1000 * 1000,
         .flags = {
             .with_dma = false,
         },

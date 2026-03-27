@@ -278,15 +278,6 @@ static esp_err_t ws_handler(httpd_req_t *req)
     return ret;
 }
 
-/* Track client disconnect */
-static esp_err_t ws_close_handler(httpd_req_t *req)
-{
-    int fd = httpd_req_to_sockfd(req);
-    remove_client(fd);
-    ESP_LOGI(TAG, "WebSocket client disconnected (fd=%d, total=%d)", fd, s_ws_client_count);
-    return ESP_OK;
-}
-
 httpd_handle_t ws_server_start(void)
 {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
@@ -305,8 +296,6 @@ httpd_handle_t ws_server_start(void)
         .uri = "/ws",
         .method = HTTP_GET,
         .handler = ws_handler,
-        .is_websocket = true,
-        .handle_ws_control_frames = false,
         .user_ctx = NULL,
     };
     httpd_register_uri_handler(s_ws_server, &ws_uri);

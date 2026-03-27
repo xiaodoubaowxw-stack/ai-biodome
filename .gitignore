@@ -1,0 +1,11 @@
+build/
+sdkconfig
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.pyc
+__pycache__/
+.vscode/
+.idea/

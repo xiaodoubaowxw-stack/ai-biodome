@@ -1,0 +1,28 @@
+name: Build Firmware
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        idf_ver: ["v5.3"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: ${{ matrix.idf_ver }}
+          target: esp32
+          path: '.'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-esp32
+          path: |
+            build/bootloader/bootloader.bin
+            build/partition_table/partition-table.bin
+            build/ai-biodome.bin
+            build/flash_args

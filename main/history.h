@@ -37,3 +37,10 @@ const history_t *history_get(void);
  * Caller must free the returned cJSON object.
  */
 void *history_build_json(void);
+
+/**
+ * Export all history data as CSV string.
+ * Caller must free() the returned string.
+ * Returns NULL if no data or allocation failure.
+ */
+char *history_export_csv(void);

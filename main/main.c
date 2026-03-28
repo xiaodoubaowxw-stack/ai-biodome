@@ -77,6 +77,9 @@ static void sensor_timer_cb(TimerHandle_t timer)
     /* Run auto control logic */
     scheduler_run();
 
+    /* Check 4-hour CSV auto export */
+    scheduler_check_csv_export();
+
     /* Record history */
     history_record(g_temperature, g_humidity, g_lux, g_soil_percent, eco2, tvoc);
 

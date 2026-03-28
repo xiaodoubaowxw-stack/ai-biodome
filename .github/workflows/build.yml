@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        idf_ver: ["v5.3"]
+        idf_ver: ["v5.5"]
     steps:
       - uses: actions/checkout@v4
       - uses: espressif/esp-idf-ci-action@v1

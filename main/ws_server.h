@@ -23,6 +23,11 @@ void ws_broadcast_json(const char *json_str);
 void ws_broadcast_state(void);
 
 /**
+ * Broadcast csv_ready event to all clients (auto-export notification).
+ */
+void ws_broadcast_csv_ready(void);
+
+/**
  * Build and return full JSON data string.
  * The caller must free() the returned string.
  */

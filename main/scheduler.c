@@ -130,3 +130,38 @@ sched_config_t *scheduler_get_config_mutable(void)
 {
     return &s_sched;
 }
+
+/* ---- CSV 自动导出 (每4小时) ---- */
+#define CSV_EXPORT_INTERVAL_S  (4 * 3600)  /* 4小时 = 14400秒 */
+
+static time_t s_last_csv_export = 0;
+static bool  s_csv_timer_loaded = false;
+
+void scheduler_check_csv_export(void)
+{
+    /* 首次调用时从 NVS 加载上次导出时间 */
+    if (!s_csv_timer_loaded) {
+        s_last_csv_export = nvs_load_csv_export_time();
+        s_csv_timer_loaded = true;
+    }
+
+    time_t now;
+    time(&now);
+
+    /* 时间未同步则跳过 */
+    struct tm ti;
+    localtime_r(&now, &ti);
+    if (ti.tm_year < (2020 - 1900)) return;
+
+    /* 检查是否到达4小时间隔 */
+    if (s_last_csv_export == 0 || (now - s_last_csv_export) >= CSV_EXPORT_INTERVAL_S) {
+        s_last_csv_export = now;
+        nvs_save_csv_export_time((uint32_t)now);
+
+        /* 通过 WebSocket 广播 csv_ready 事件 */
+        extern void ws_broadcast_csv_ready(void);
+        ws_broadcast_csv_ready();
+
+        ESP_LOGI(TAG, "CSV auto-export triggered (4h interval)");
+    }
+}

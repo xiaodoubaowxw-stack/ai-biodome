@@ -222,6 +222,18 @@ void ws_broadcast_state(void)
     free(json_str);
 }
 
+void ws_broadcast_csv_ready(void)
+{
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddStringToObject(root, "csv_ready", "1");
+    char *json_str = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (json_str) {
+        ws_broadcast_json(json_str);
+        free(json_str);
+    }
+}
+
 /* Handle incoming WebSocket messages */
 static void handle_ws_message(const uint8_t *payload, size_t len)
 {
@@ -294,6 +306,24 @@ static void handle_ws_message(const uint8_t *payload, size_t len)
         if (full) {
             ws_broadcast_json(full);
             free(full);
+        }
+    }
+    else if (strcmp(action_str, "export_csv") == 0) {
+        /* 导出历史数据为 CSV */
+        char *csv = history_export_csv();
+        cJSON *resp = cJSON_CreateObject();
+        if (csv) {
+            cJSON_AddStringToObject(resp, "csv_data", csv);
+            free(csv);
+        } else {
+            cJSON_AddNullToObject(resp, "csv_data");
+            cJSON_AddStringToObject(resp, "csv_error", "暂无历史数据");
+        }
+        char *resp_str = cJSON_PrintUnformatted(resp);
+        cJSON_Delete(resp);
+        if (resp_str) {
+            ws_broadcast_json(resp_str);
+            free(resp_str);
         }
     }
 

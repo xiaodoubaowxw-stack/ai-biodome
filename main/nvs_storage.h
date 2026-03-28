@@ -36,3 +36,14 @@ esp_err_t nvs_save_sched(bool fan_en, const char *fan_start, const char *fan_end
  */
 esp_err_t nvs_load_sched(bool *fan_en, char *fan_start, char *fan_end,
                           bool *light_en, char *light_start, char *light_end);
+
+/**
+ * Save last CSV export timestamp to NVS.
+ */
+esp_err_t nvs_save_csv_export_time(uint32_t timestamp);
+
+/**
+ * Load last CSV export timestamp from NVS.
+ * Returns 0 if not found.
+ */
+uint32_t nvs_load_csv_export_time(void);

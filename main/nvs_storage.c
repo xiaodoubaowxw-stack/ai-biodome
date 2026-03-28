@@ -106,3 +106,27 @@ esp_err_t nvs_load_sched(bool *fan_en, char *fan_start, char *fan_end,
     nvs_close(handle);
     return ESP_OK;
 }
+
+esp_err_t nvs_save_csv_export_time(uint32_t timestamp)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open("csv-export", NVS_READWRITE, &handle);
+    if (ret != ESP_OK) return ret;
+
+    nvs_set_u32(handle, "last_ts", timestamp);
+    nvs_commit(handle);
+    nvs_close(handle);
+    return ESP_OK;
+}
+
+uint32_t nvs_load_csv_export_time(void)
+{
+    nvs_handle_t handle;
+    esp_err_t ret = nvs_open("csv-export", NVS_READONLY, &handle);
+    if (ret != ESP_OK) return 0;
+
+    uint32_t ts = 0;
+    nvs_get_u32(handle, "last_ts", &ts);
+    nvs_close(handle);
+    return ts;
+}

@@ -35,3 +35,10 @@ sched_config_t *scheduler_get_config_mutable(void);
  * SGP30 periodic read task (must be called every 1 second).
  */
 void scheduler_sgp30_tick(void);
+
+/**
+ * Check if 4 hours have passed since last CSV export.
+ * If so, broadcast csv_ready event via WebSocket.
+ * Call this from the 5-second sensor timer.
+ */
+void scheduler_check_csv_export(void);

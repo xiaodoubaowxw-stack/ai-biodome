@@ -41,6 +41,7 @@ const char index_html[] = R"rawliteral(
         </div>
       </div>
       <a href='/reset' class="mt-4 md:mt-0 px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg shadow transition-colors text-sm font-medium" onclick="return confirm('确定要清除 WiFi 配置并重启吗？')">⚠️ 重置WiFi</a>
+      <button id="btn-download-csv" class="mt-4 md:mt-0 md:mr-3 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg shadow transition-colors text-sm font-medium" onclick="downloadCSV()">📥 下载数据</button>
     </div>
 
     <!-- 👇 修改：实时环境数据卡片扩容为 6 项 -->
@@ -529,6 +530,62 @@ const char index_html[] = R"rawliteral(
       window.toggleDevice = function(dev) {
         var isOn = document.getElementById('cb-' + dev).checked;
         if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ action: 'set_device', device: dev, state: isOn ? 1 : 0 }));
+      };
+
+      // ----- CSV 数据下载 -----
+      window.downloadCSV = function() {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
+          alert('WebSocket 未连接，无法下载');
+          return;
+        }
+        var btn = document.getElementById('btn-download-csv');
+        btn.disabled = true;
+        btn.innerText = '导出中...';
+        btn.classList.add('opacity-50');
+        socket.send(JSON.stringify({ action: 'export_csv' }));
+      };
+
+      // 拦截 updateUI 处理 CSV 数据
+      const _origUpdateUI2 = updateUI;
+      updateUI = function(data) {
+        if (data.csv_data) {
+          var btn = document.getElementById('btn-download-csv');
+          btn.disabled = false;
+          btn.innerText = '📥 下载数据';
+          btn.classList.remove('opacity-50');
+          // 触发浏览器下载
+          var blob = new Blob([data.csv_data], { type: 'text/csv;charset=utf-8;' });
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = url;
+          var now = new Date();
+          a.download = 'biodome_data_' + now.getFullYear() + 
+            String(now.getMonth()+1).padStart(2,'0') + 
+            String(now.getDate()).padStart(2,'0') + '_' +
+            String(now.getHours()).padStart(2,'0') +
+            String(now.getMinutes()).padStart(2,'0') + '.csv';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }
+        if (data.csv_ready) {
+          var btn = document.getElementById('btn-download-csv');
+          btn.classList.add('ring-2', 'ring-yellow-400', 'ring-offset-2');
+          btn.innerText = '📥 新数据可下载';
+          setTimeout(function() {
+            btn.classList.remove('ring-2', 'ring-yellow-400', 'ring-offset-2');
+            btn.innerText = '📥 下载数据';
+          }, 10000);
+        }
+        if (data.csv_error) {
+          var btn = document.getElementById('btn-download-csv');
+          btn.disabled = false;
+          btn.innerText = '📥 下载数据';
+          btn.classList.remove('opacity-50');
+          alert(data.csv_error);
+        }
+        _origUpdateUI2(data);
       };
 
       // ----- AI 助手交互逻辑 -----

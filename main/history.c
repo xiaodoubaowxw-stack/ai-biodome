@@ -92,3 +92,38 @@ void *history_build_json(void)
 
     return history;
 }
+
+char *history_export_csv(void)
+{
+    if (s_history.count == 0) return NULL;
+
+    /* 预估缓冲区: header ~80字节 + 每行 ~80字节 */
+    size_t buf_size = 128 + (size_t)s_history.count * 80;
+    char *buf = malloc(buf_size);
+    if (!buf) return NULL;
+
+    int pos = 0;
+    pos += snprintf(buf + pos, buf_size - pos,
+        "timestamp,temperature,humidity,light,soil,eco2,tvoc\n");
+
+    for (int i = 0; i < s_history.count; i++) {
+        int idx = (s_history.head + i) % HISTORY_SIZE;
+        if (buf_size - pos < 80) {
+            /* 缓冲区不足，扩容 */
+            buf_size *= 2;
+            buf = realloc(buf, buf_size);
+            if (!buf) return NULL;
+        }
+        pos += snprintf(buf + pos, buf_size - pos,
+            "%s,%.1f,%.1f,%.0f,%d,%u,%u\n",
+            s_history.time[idx],
+            s_history.temp[idx],
+            s_history.hum[idx],
+            s_history.lux[idx],
+            s_history.soil[idx],
+            s_history.eco2[idx],
+            s_history.tvoc[idx]);
+    }
+
+    return buf;
+}
